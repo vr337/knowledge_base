@@ -7,7 +7,10 @@ wheels/
 *.egg-info
 test/
 logs/
-
+.vscode/
+doc/
+output/
+fastapi/
 # Virtual environments
 .venv
 .env
