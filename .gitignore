@@ -5,7 +5,13 @@ build/
 dist/
 wheels/
 *.egg-info
-
+test/
+logs/
+.vscode/
+doc/
+output/
+fastapi/
+sse/
 # Virtual environments
 .venv
 .env
