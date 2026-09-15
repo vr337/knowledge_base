@@ -11,6 +11,7 @@ logs/
 doc/
 output/
 fastapi/
+sse/
 # Virtual environments
 .venv
 .env
