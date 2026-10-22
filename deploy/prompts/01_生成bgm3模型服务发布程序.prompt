@@ -1,0 +1,19 @@
+【目标】 
+   我想把bgem3 部署在云gpu服务器上，请帮我生成一个python程序。 把bgem3 模型发布为 模型http服务。 
+【环境】 
+   模型保存在linux服务器上/usr-data/models/BAAI/bge-m3位置 
+【接口要求】 
+   1 请参考app\lm\embedding_utils.py 中的对外提供的数据结构。 来设计模型服务接口的数据结构。 希望模型提供的数据能够更容易的对接到现有的项目中。 
+   2 使用fastapi 来实现web服务。 
+【代码要求】
+    1 要求每个方法有详细的中文注释说明 。 
+    2  把程序存放在deploy 目录下 bgem3_server.py 不要改动其他代码。
+【请求格式】
+   curl http://127.0.0.1:6006/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"embedding_documents":["RS12 万用表如何测量交流电压？","如何判断电阻量程？"]}'
+【返回值格式】
+    {
+      "dense": [[...]],
+      "sparse": [{"...": 0.123}]
+    }

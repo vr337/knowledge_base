@@ -1,0 +1,36 @@
+【背景】
+我们已经在云 GPU 服务器上成功部署并验证了两个模型服务（附件1和附件2）。这两个服务的接口和数据格式是绝对标准，**不需要做任何修改**。
+
+现在需要改造业务项目中的客户端代码（如 `bge_m3_embedding_util.py` 和 `bge_rerank_util.py`）。要求如下：
+1. **默认走本地加载**（直接在代码里 import 模型），通过 `.env` 配置可动态切换到调用远端的 HTTP 服务。
+2. 客户端必须适配附件中已经跑通的服务端接口规范。
+3. 绝对不能改变原有上层业务代码的调用方式。
+
+【服务端接口规范（即改造依据）】
+1. **BGE-M3 远端服务**（附件1）：
+   - 路由：`POST /v1/embeddings`
+   - 入参：`{"embedding_documents": ["文本1", "文本2"]}`
+   - 出参：`{"dense": [[...]], "sparse": [{...}]}`
+2. **Reranker 远端服务**（附件2）：
+   - 路由：`POST /v1/rerank`
+   - 入参：`{"sentence_pairs": [["query", "doc"], ...]}`
+   - 出参：`{"scores": [0.9, 0.1, ...]}`
+
+【客户端改造要求】
+1. **配置开关**：
+   - 在 `.env` 中新增两个开关（默认 True）：`BGE_M3_USE_LOCAL=True` 和 `BGE_RERANKER_USE_LOCAL=True`。
+   - 读取对应的本地路径（如 `BGE_M3_PATH`）和远端 HTTP URL（如 `BGE_M3_HTTP_URL`）。
+2. **改造 BGE-M3 客户端**：
+   - 提供一个统一工厂函数（如 `get_embedding_model()`），根据开关返回本地实例或 HTTP 客户端实例。
+   - 如果走 HTTP 客户端，必须把返回的 JSON 数据在内部包装转换，使得它的 `encode_documents` 方法对外表现和本地模型完全一致（尤其是 `sparse` 需要模拟成兼容 CSR 的结构）。
+3. **改造 Reranker 客户端**：
+   - 提供一个统一工厂函数（如 `get_reranker_model()`），根据开关返回本地实例或 HTTP 客户端实例。
+   - 如果走 HTTP 客户端，必须提供与本地一致的 `compute_score(sentence_pairs)` 方法，返回 `List[float]`。
+4. **代码规范**：
+   - 判断逻辑全部封装在工厂函数内，业务层无感知。
+   - 加上详细的中文注释。
+
+请仔细阅读附件的接口格式，然后直接输出改造后的客户端工具类代码，以及 `.env` 配置示例。
+
+附件1：bge_m3_service.py（验证通过的 BGE-M3 服务端代码）
+附件2：bge_reranker_service.py（验证通过的 Reranker 服务端代码）

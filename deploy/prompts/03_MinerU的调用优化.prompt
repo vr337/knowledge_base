@@ -1,0 +1,15 @@
+在项目的【导入流程】中，PDF文件转MD功能目前的实现是基于模块化函数（node_pdf_to_md、step_1_validate_paths、step_2_upload_and_poll、step_3_download_and_extract），调用的是在线 MinerU API。
+
+现在需要改造成支持本地 MinerU 工具调用，且默认使用本地模式，通过 .env 配置兼容 API 模式。要求如下：
+
+1. **保留原有 API 逻辑**：完整保留现有的 `step_2_upload_and_poll` 和 `step_3_download_and_extract` 方法，不要做任何修改。
+2. **新增本地调用逻辑**：
+   - 新增 `step_2_local_mineru(pdf_path_obj: Path, output_dir_obj: Path) -> str` 方法，通过 `subprocess.Popen` 调用本地 CLI 工具（如 `mineru -p <input> -o <output> -b pipeline --source local`）。
+   - 该方法需要持续读取 stdout 并打印到 logger，等待子进程结束。如果执行成功（返回码为0），直接返回最终生成的 Markdown 文件绝对路径（字符串）；如果失败，抛出异常。
+3. **新增配置项**：在 `mineru_config` 中增加一个布尔属性 `use_local`（对应 .env 中的 `MINERU_USE_LOCAL`，默认值为 True）。
+4. **改造主节点路由分发**：修改 `node_pdf_to_md` 函数，在完成 `step_1_validate_paths` 之后，根据 `mineru_config.use_local` 的值进行分流：
+   - 如果 `use_local` 为 True，直接调用 `step_2_local_mineru` 获取 `md_path`。
+   - 如果 `use_local` 为 False，则按原流程调用 `step_2_upload_and_poll` 和 `step_3_download_and_extract` 获取 `md_path`。
+5. **业务逻辑保持不变**：无论走哪条分支，最终都要给 `state["md_path"]` 和 `state["md_content"]` 赋值，后续的日志和任务状态处理逻辑保持不变。
+
+请直接输出修改后的完整代码，并在关键改动处添加详细的中文注释。

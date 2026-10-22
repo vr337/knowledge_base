@@ -1,0 +1,105 @@
+# =============================================================================
+# 知识库项目依赖清单（参考用，非安装依据）
+#
+# 权威来源是 pyproject.toml + uv.lock，部署/安装请使用：
+#     uv sync --frozen --no-dev --no-install-project
+#
+# 本文件的用途：
+#   1. 提供一份扁平可读的完整依赖视图，便于快速了解项目用了哪些包及锁定版本；
+#   2. 应急备份——万一 pyproject.toml / uv.lock 被误删，可据此恢复环境：
+#          pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#      注意：torch 三件组走 PyTorch 官方 CPU 源，见文件末尾说明。
+#
+# 版本与 uv.lock 完全一致（由 uv.lock 解析结果生成，非手写）。
+# 最后同步时间：2026-10-22
+# =============================================================================
+
+# --------------------- 顶层直接依赖（pyproject.toml [project.dependencies]） ---------------------
+# Web 框架与服务
+fastapi==0.135.1
+uvicorn==0.42.0
+python-multipart==0.0.22
+pydantic==2.10.6
+
+# LangChain / LangGraph 工作流
+langchain==1.2.13
+langchain-community==0.4.1
+langchain-core==1.2.20
+langchain-text-splitters==1.1.1
+langchain-openai==1.1.11
+langgraph==1.1.3
+grandalf==0.8
+
+# LLM 客户端
+openai==2.29.0
+openai-agents==0.4.2
+mcp==1.12.4
+
+# Embedding / Reranker 模型
+flagembedding==1.3.5
+transformers==4.57.6
+sentence-transformers==5.3.0
+modelscope==1.35.1
+
+# 向量数据库（pymilvus 的 milvus_lite + model extra）
+pymilvus[milvus_lite,model]==2.6.10
+pymilvus-model==0.3.2
+
+# 对象存储
+minio==7.2.20
+
+# 文档数据库（会话历史）
+pymongo==4.16.0
+
+# PDF 解析（MinerU 生态）
+magic-pdf==1.3.12
+mineru-kie-sdk==0.1.1
+
+# 通用工具
+loguru==0.7.3
+python-dotenv==1.2.2
+requests==2.32.5
+regex==2026.2.28
+numpy==2.4.3
+pandas==3.0.1
+datasets==4.8.4
+
+# RAG 效果评估
+ragas==0.4.3
+
+# --------------------- 深度学习框架（必须用 CPU 版） ---------------------
+# 这三个包必须从 PyTorch 官方 CPU 源安装，PyPI / 清华源在 Linux 上提供的是 CUDA 版
+# （体积 2.5GB+ 且依赖 libcudart，无 GPU 的服务器上 import 会直接崩溃）。
+#
+# 安装命令：
+#   pip install torch==2.14.1 torchaudio==2.11.0 torchvision==0.29.1 \
+#     --index-url https://download.pytorch.org/whl/cpu
+#
+# 国内网络慢可改用阿里云镜像：
+#   --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/
+#
+# 注意：本地开发机 .venv 中可能仍是旧版（如 torch==2.10.0），因为 `uv lock`
+# 只更新锁文件不会重装环境。部署到 CPU 服务器时以 uv.lock / 本文件为准，
+# 即 2.14.1 / 2.11.0 / 0.29.1 这套 +cpu 版本。
+torch==2.14.1
+torchaudio==2.11.0
+torchvision==0.29.1
+
+# =============================================================================
+# 与原版 requirements.txt 的差异说明（2026-10-22 修正）
+#
+# 删除的包（代码中未 import，且 uv.lock / .venv 中均不存在）：
+#   - neo4j==6.2.0         ：app/ 下无任何 neo4j import，Neo4j 容器虽在 compose 中，
+#                            但业务代码当前未使用图数据库
+#   - mineru[all]==3.1.15  ：实际安装的是 magic-pdf==1.3.12 + mineru-kie-sdk==0.1.1，
+#                            没有独立的 mineru 包；mineru[all] 会引入与 magic-pdf
+#                            冲突的依赖
+#
+# 修正的包（原文件缺失，但属于硬依赖）：
+#   - loguru==0.7.3        ：项目全部日志基于它，缺失则任何模块都无法 import
+#   - python-multipart     ：FastAPI /upload 接口接收 form-data 必需，缺失则上传 500
+#   - pydantic / transformers / numpy / datasets / modelscope / regex / mcp
+#                          ：原文件未显式声明，依赖隐式传递，版本不可控
+#
+# 版本对齐：所有版本号改为 uv.lock 的真实解析结果，避免与 uv sync 环境不一致
+# =============================================================================
