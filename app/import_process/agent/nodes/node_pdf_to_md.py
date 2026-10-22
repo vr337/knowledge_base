@@ -4,9 +4,10 @@ node_pdf_to_md
   返回： state [md_path = 地址 | md_content = 内容 ]
   1. 日志和任务状态
   2. step_1_validate_paths路径校验
-  3. step_2_upload_and_poll minerU的交互
-  4. step_3_download_and_extract 下载和解压
-  5. 日志和任务状态 return state
+  3. 根据 mineru_config.use_local 分流：
+     - True  → step_2_local_mineru（本地 CLI 工具，直接产出 md）
+     - False → step_2_upload_and_poll + step_3_download_and_extract（在线 MinerU API）
+  4. 日志和任务状态 return state
 step_1_validate_paths
   参数：state pdf_path = xxx.pdf | local_dir = output
   返回： pdf_path_obj Path  local_dir_obj Path
@@ -33,6 +34,7 @@ step_3_download_and_extract
 """
 
 import shutil
+import subprocess
 import time
 import zipfile
 from pathlib import Path
@@ -52,10 +54,10 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
     """
     节点: PDF转Markdown (node_pdf_to_md)
     为什么叫这个名字: 核心任务是将 PDF 非结构化数据转换为 Markdown 结构化数据。
-    未来要实现:
-    1. 调用 MinerU (magic-pdf) 工具。
-    2. 将 PDF 转换成 Markdown 格式。
-    3. 将结果保存到 state["md_content"]。
+    实现方式（由 mineru_config.use_local 决定，默认本地模式）：
+    1. use_local=True  → 调用本地 MinerU 命令行工具（step_2_local_mineru）
+    2. use_local=False → 调用在线 MinerU API（step_2_upload_and_poll + step_3_download_and_extract）
+    两条分支最终都把结果写入 state["md_path"] 与 state["md_content"]。
     Args:
         state (ImportGraphState): 全局状态
 
@@ -66,10 +68,15 @@ def node_pdf_to_md(state: ImportGraphState) -> ImportGraphState:
     add_running_task(state.get("task_id"), "node_pdf_to_md")
     # 2. step_1_validate_paths 校验路径完整以及是否真实存在
     pdf_path_obj,output_dir_obj=step_1_validate_paths(state)
-    # 3. step_2_upload_and_poll 上传文件并轮询判断
-    zip_url=step_2_upload_and_poll(pdf_path_obj)
-    # 4. step_3_download_and_extract 下载并解压
-    md_path=step_3_download_and_extract(zip_url,output_dir_obj,pdf_path_obj.stem)
+    # 3. 根据配置分流：本地 MinerU CLI 模式优先，否则走在线 MinerU API 模式
+    if mineru_config.use_local:
+        # 分支1：本地模式，调用本地 mineru 命令行工具，直接拿到最终的 md 文件路径
+        md_path = step_2_local_mineru(pdf_path_obj, output_dir_obj)
+    else:
+        # 分支2：API 模式，step_2_upload_and_poll 上传文件并轮询判断
+        zip_url = step_2_upload_and_poll(pdf_path_obj)
+        # step_3_download_and_extract 下载并解压
+        md_path = step_3_download_and_extract(zip_url, output_dir_obj, pdf_path_obj.stem)
     # 5. 处理响应结果 state进行赋值处理
     logger.info(f"成功获取MD文件路径: {md_path}")
     # 同步一下最新md_path
@@ -120,6 +127,128 @@ def step_1_validate_paths(state: ImportGraphState) -> tuple[Path, Path]:
         logger.warning(f"输出目录不存在，已自动创建：{output_dir_obj}")
         output_dir_obj.mkdir(parents=True, exist_ok=True)
     return pdf_path_obj, output_dir_obj
+
+
+@step_log("step_2_local_mineru")
+def step_2_local_mineru(pdf_path_obj: Path, output_dir_obj: Path) -> str:
+    """
+    步骤2（本地模式）：通过子进程调用本地 MinerU CLI 工具完成 PDF → Markdown 转换
+    核心流程：组装命令 → subprocess.Popen 启动子进程 → 实时读取 stdout 并打印日志
+              → 等待进程结束 → 按返回码判断成败 → 定位最终 md 文件并返回绝对路径
+    为什么用 Popen 而不是 run：CLI 解析一份 PDF 可能耗时数分钟，需要把 stdout
+        实时转发到 logger，避免长时间无日志、无法判断卡在哪一步。
+    参数：pdf_path_obj-已校验的PDF Path对象；output_dir_obj-输出目录Path对象
+    返回：最终生成的 Markdown 文件绝对路径（字符串）
+    异常：RuntimeError(命令启动失败/子进程返回码非0/未找到md文件)
+
+    Args:
+        pdf_path_obj (Path): 待转换pdf文件路径的Path对象
+        output_dir_obj (Path): 输出目录路径的Path对象
+
+    Returns:
+        str: 转换后生成的md文件绝对路径
+    """
+    # 1. 组装本地 mineru 命令行
+    # -p 指定输入PDF路径，-o 指定输出目录，-b pipeline 指定pipeline后端，--source local 指定模型来源为本地
+    command = [
+        "mineru",
+        "-p", str(pdf_path_obj),
+        "-o", str(output_dir_obj),
+        "-b", "pipeline",
+        "--source", "local",
+    ]
+    logger.info(f"开始调用本地 MinerU CLI，执行命令：{' '.join(command)}")
+
+    # 2. 启动子进程
+    # text=True + encoding="utf-8"：以文本模式按UTF-8解码stdout，避免中文/特殊字符乱码
+    # errors="replace"：遇到无法解码的字节时用占位符替代，防止解码异常直接中断读取循环
+    # bufsize=1：行缓冲，保证stdout能尽快被读取到，日志实时性更好
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # 把stderr合并进stdout，错误信息也能实时看到，避免管道缓冲区写满导致子进程阻塞
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except FileNotFoundError as e:
+        # 本地未安装 MinerU（或已安装但未加入系统PATH），无法启动子进程
+        # 这里给出完整的安装指引，避免用户只看到一句「找不到文件」无从下手
+        error_msg = (
+            "本地未安装 MinerU，无法调用本地 MinerU CLI 完成 PDF 转 Markdown。\n"
+            "解决方案（二选一）：\n"
+            "  方案1（推荐，使用本地 MinerU）：安装 MinerU 并确保 mineru 命令已加入系统 PATH\n"
+            "         官方安装文档：https://opendatalab.github.io/MinerU/quick_start/\n"
+            "         验证是否安装成功：在命令行执行 mineru --help\n"
+            "  方案2（改用在线 MinerU API）：在 .env 中设置 MINERU_USE_LOCAL=False，"
+            "并配置 MINERU_API_TOKEN 与 MINERU_BASE_URL\n"
+            f"原始异常信息：{e}"
+        )
+        logger.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        logger.error(f"启动本地 MinerU 子进程失败，异常信息：{e}")
+        raise RuntimeError(f"启动本地 MinerU 子进程失败：{e}") from e
+
+    # 3. 实时读取stdout并打印到logger，直到子进程结束
+    # 逐行读取（for line in process.stdout），每读到一行就立刻落日志，不等待进程结束
+    try:
+        for line in process.stdout:
+            # 去掉行尾换行符，空行跳过，避免日志被大量空行刷屏
+            log_line = line.rstrip()
+            if log_line:
+                logger.info(f"[mineru] {log_line}")
+    except Exception as e:
+        # 读取过程中出现异常，兜底杀掉子进程，避免残留僵尸进程
+        logger.error(f"读取 MinerU 输出流异常：{e}")
+        process.kill()
+        raise RuntimeError(f"读取 MinerU 输出流异常：{e}") from e
+
+    # 4. 等待子进程完全结束并获取返回码
+    return_code = process.wait()
+    if return_code != 0:
+        # 返回码非0表示转换失败，抛出异常，交由上层节点统一处理任务失败状态
+        logger.error(
+            f"本地 MinerU 执行失败，返回码：{return_code}，请检查上方[minuer]日志定位具体原因"
+        )
+        raise RuntimeError(f"本地 MinerU 执行失败，返回码：{return_code}")
+
+    # 5. 转换成功，定位生成的md文件
+    # mineru 的输出目录结构为 output_dir/<pdf文件名>/<method>/ 下存放 images/ 与 <pdf文件名>.md
+    # 这里直接用 rglob 在输出目录内递归查找目标md文件，优先找与pdf同名的md文件
+    pdf_stem = pdf_path_obj.stem
+    md_file_list = list(output_dir_obj.rglob("*.md"))
+
+    if not md_file_list:
+        logger.error(
+            f"本地 MinerU 执行成功，但未在输出目录中找到md文件：{output_dir_obj}"
+        )
+        raise FileNotFoundError(f"本地 MinerU 执行成功，但未找到md文件：{output_dir_obj}")
+
+    # 按优先级查找：与pdf同名的md文件 → full.md → 兜底第一个md文件
+    target_md_file = None
+    # 优先找与原文件名同名的md文件
+    for md_file in md_file_list:
+        if md_file.stem == pdf_stem:
+            target_md_file = md_file
+            break
+    # 没有就找full.md文件，不区分大小写
+    if not target_md_file:
+        for md_file in md_file_list:
+            if md_file.name.lower() == "full.md":
+                target_md_file = md_file
+                break
+    # 兜底，用列表的第一个md文件
+    if not target_md_file:
+        target_md_file = md_file_list[0]
+
+    # 6. 返回最终的md文件绝对路径（字符串）
+    md_path = str(target_md_file.absolute())
+    logger.info(f"本地 MinerU 转换成功，MD文件路径: {md_path}")
+    return md_path
+
 
 @step_log("step_2_upload_and_poll")
 def step_2_upload_and_poll(pdf_path_obj: Path) -> str:
@@ -190,7 +319,7 @@ def step_2_upload_and_poll(pdf_path_obj: Path) -> str:
             )
     # 5. 轮询解析任务状态（带超时控制 + 服务端异常自动重试）
     poll_url = f"{mineru_config.base_url}/extract-results/batch/{batch_id}"
-    timeout_seconds = 600  # 最大超时时间
+    timeout_seconds = 1800  # 最大超时时间
     poll_interval = 3  # 轮询间隔
     # 开始计时
     start_time = time.time()

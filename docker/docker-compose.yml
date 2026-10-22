@@ -1,0 +1,239 @@
+# =============================================================================
+# 知识库 CPU 服务器部署编排
+#
+# 组成：etcd / minio / milvus standalone / attu / neo4j / mongodb 六个中间件
+#       + kb-import(8000) / kb-query(8084) 两个应用服务
+#
+# 模型策略（与 GPU 服务器解耦）：
+#   BGE-M3、BGE-Reranker、LLM 均不放在本编排内。应用服务通过 .env 开关
+#   调用远端已部署的 HTTP 服务或云端 API：
+#       BGE_M3_USE_LOCAL=False      + BGE_M3_HTTP_URL=http://<gpu服务器IP>:6006
+#       BGE_RERANKER_USE_LOCAL=False + BGE_RERANKER_HTTP_URL=http://<gpu服务器IP>:6008
+#       LLM_USE_LOCAL=False         （走 DashScope，或自建 vLLM 填 LLM_LOCAL_*）
+#   因此本编排全部服务均可运行在无 GPU 的 CPU 服务器上。
+#
+# 启动：docker compose -f docker/docker-compose.yml up -d
+# =============================================================================
+services:
+  # ==================== Etcd ====================
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.25
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: always
+    networks:
+      - milvus
+
+  # ==================== MinIO ====================
+  # Milvus 的内部存储后端，同时作为知识库图片的对象存储
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9011:9001"   # 控制台
+      - "9010:9000"   # S3 API
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: always
+    networks:
+      - milvus
+
+  # ==================== Milvus ====================
+  standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.5.5
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MQ_TYPE: rocksmq
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      start_period: 90s   # Milvus 首次启动需加载索引，给足缓冲
+      retries: 3
+    ports:
+      - "19530:19530"   # gRPC / 客户端连接
+      - "9091:9091"     # 健康检查与监控
+    restart: always
+    networks:
+      - milvus
+    depends_on:
+      - etcd
+      - minio
+
+  # ==================== Attu (Milvus GUI) ====================
+  attu:
+    container_name: attu
+    image: zilliz/attu:v2.5.10
+    environment:
+      - MILVUS_URL=standalone:19530
+      - ATTU_LOG_LEVEL=info
+      - SERVER_PORT=7000
+    ports:
+      - "7000:7000"
+    restart: always
+    networks:
+      - milvus
+    depends_on:
+      - standalone
+
+  # ==================== Neo4j ====================
+  neo4j:
+    container_name: neo4j
+    image: neo4j:2025-community
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/logs:/logs
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/config:/config
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/data:/data
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/plugins:/plugins
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j123456
+      # 限制 JVM 堆大小，避免在内存较小的 CPU 服务器上被 Neo4j 吃满
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1G
+      - NEO4J_server_memory_pagecache_size=512m
+    ports:
+      - "7474:7474"   # HTTP / Browser
+      - "7687:7687"   # Bolt
+    restart: always
+    networks:
+      - milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==================== MongoDB ====================
+  mongodb:
+    container_name: mongodb
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mongodb/data:/data/db
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mongodb/config:/data/configdb
+    restart: always
+    networks:
+      - milvus
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==================== 知识库：导入服务 ====================
+  kb-import:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: knowledge-base:app
+    container_name: kb-import
+    environment:
+      - SERVICE=import
+      # 中间件地址：使用 compose 网络内的服务名，不能用开发机的 IP
+      - MILVUS_URL=standalone:19530
+      - NEO4J_URI=bolt://neo4j:7687
+      - MONGO_URL=mongodb://mongodb:27017
+      - MINIO_ENDPOINT=minio:9000
+      # 模型全部走远端，容器内不加载本地权重
+      - BGE_M3_USE_LOCAL=False
+      - BGE_RERANKER_USE_LOCAL=False
+      - LLM_USE_LOCAL=False
+      # 覆盖开发机 .env 里遗留的 CPU/本地路径配置，避免误加载本地模型
+      - BGE_DEVICE=cpu
+      - BGE_FP16=0
+      - BGE_RERANKER_DEVICE=cpu
+      - BGE_RERANKER_FP16=0
+      # MinerU：默认本地模式需要容器内装 mineru CLI，镜像未安装，故显式走在线 API
+      - MINERU_USE_LOCAL=False
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    restart: always
+    depends_on:
+      standalone:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    networks:
+      - milvus
+
+  # ==================== 知识库：查询服务 ====================
+  kb-query:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: knowledge-base:app
+    container_name: kb-query
+    environment:
+      - SERVICE=query
+      # 中间件地址：与 kb-import 保持一致，均使用 compose 网络内服务名
+      - MILVUS_URL=standalone:19530
+      - NEO4J_URI=bolt://neo4j:7687
+      - MONGO_URL=mongodb://mongodb:27017
+      - MINIO_ENDPOINT=minio:9000
+      # 模型全部走远端，容器内不加载本地权重
+      - BGE_M3_USE_LOCAL=False
+      - BGE_RERANKER_USE_LOCAL=False
+      - LLM_USE_LOCAL=False
+      - BGE_DEVICE=cpu
+      - BGE_FP16=0
+      - BGE_RERANKER_DEVICE=cpu
+      - BGE_RERANKER_FP16=0
+      - MINERU_USE_LOCAL=False
+    env_file:
+      - ../.env
+    ports:
+      - "8084:8084"
+    restart: always
+    depends_on:
+      standalone:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    networks:
+      - milvus
+
+networks:
+  # 命名网络 milvus：所有服务（中间件 + 应用）都加入该网络，
+  # 容器间通过服务名互相寻址（如 standalone:19530、minio:9000）
+  milvus:
+    name: milvus
+    driver: bridge

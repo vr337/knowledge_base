@@ -14,8 +14,11 @@ load_dotenv()
 class MineruConfig:
     base_url: str
     api_key : str
+    use_local: bool # 是否使用本地mineru命令行工具（True=本地CLI，False=在线API）
 
 mineru_config = MineruConfig(
     base_url=os.getenv("MINERU_BASE_URL"),
-    api_key=os.getenv("MINERU_API_TOKEN")
+    api_key=os.getenv("MINERU_API_TOKEN"),
+    # 特殊处理：将.env中的True/False转为布尔值，默认True（本地模式优先）
+    use_local=os.getenv("MINERU_USE_LOCAL", "True") in ("1", "True", "true", 1)
 )

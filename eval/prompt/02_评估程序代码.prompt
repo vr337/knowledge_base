@@ -1,0 +1,34 @@
+## 生成评估程序
+请帮我生成一个python语言的基于ragas的评估测试程序
+
+【依赖与版本】
+1 使用 ragas 0.4.x（当前环境实装 0.4.3），并把 ragas 依赖补进 pyproject.toml
+2 ragas 0.4.x 的指标（Faithfulness 等）已不再是 Metric 子类，不能传给 evaluate(metrics=[...])；应直接 await 各指标的 ascore() 逐条打分，再自行组装结果表
+3 各指标必须在构造时注入 llm，其中 AnswerRelevancy、AnswerCorrectness 还需注入 embeddings
+
+【程序输入要求】
+1 从 eval 目录下读取 qa.csv，该文件包含两列：question（问题）与 ground_truth（参考答案）；文件编码为 utf-8 BOM，读取时用 utf-8-sig 解码以自动去掉 BOM
+
+【程序过程要求】
+1 rag流程的入口在app/query_process/agent/main_graph.py程序中kb_query_app.invoke流程启动入口；初始状态用 app/query_process/agent/state.py 的 create_query_default_state 构建，session_id 每条问题唯一，is_stream 传 False
+2 rag流程执行完成后从 state 中的 reranked_docs 获得上下文，取每个文档的 text 字段
+3 答案不能从 kb_query_app.invoke 的返回值里取：node_answer_output 节点没有 return state（只原地修改传入的字典），该修改不会合并进 invoke 的返回值；须按 app/query_process/api/query_service.py 的用法，调用 app/utils/task_utils.py 的 get_task_result(session_id, "answer", "") 获取
+4 ragas 使用的 LLM：ragas 0.4.x 的指标要求 LLM 为 InstructorBaseRagasLLM，而 app/lm/lm_utils.py 的 get_llm_client 返回的是 ChatOpenAI（只能经已废弃、且不被 0.4.x 指标接受的 LangchainLLMWrapper 接入），因此改用 ragas 官方 llm_factory，并复用 app/conf/lm_config.py 的 base_url / api_key / llm_model；client 必须传异步的 AsyncOpenAI，传同步 OpenAI 会报 "Cannot use agenerate() with a synchronous client"
+5 llm_factory 的 max_tokens 默认仅 1024，中文长答案会触发 "The output is incomplete due to a max_tokens length limit"，需显式放宽（如 4096）
+6 文本嵌入：app/lm/embedding_utils.py 中不存在 get_bge_m3_client，只有 get_bge_m3_ef（pymilvus 的 BGEM3EmbeddingFunction）和 generate_embeddings(texts)，都不是 ragas 需要的接口；需在 eval.py 内实现一个继承 ragas BaseRagasEmbedding 的适配器（实现 embed_text / aembed_text 两个抽象方法，另可覆写 embed_texts 做批量优化），内部复用 generate_embeddings
+7 要求ragas评估出5个指标：Faithfulness、Answer Relevancy、Context Precision、Context Recall、Answer Correctness；其中 Context Precision 采用带参考答案的 ContextPrecisionWithReference
+8 各指标入参：Faithfulness(user_input, response, retrieved_contexts)、AnswerRelevancy(user_input, response)、ContextPrecisionWithReference(user_input, reference, retrieved_contexts)、ContextRecall(user_input, retrieved_contexts, reference)、AnswerCorrectness(user_input, response, reference)
+9 五个指标共用同一个事件循环：打分函数写成 async 并 await ascore()，main 也用 asyncio.run 驱动，避免反复 asyncio.run 导致异步 LLM 客户端绑定到已关闭的事件循环
+10 单个指标计算失败时只把该列置空并记录日志，不得中断其余指标与后续样本；单条 RAG 流程执行失败同理
+11 Windows 下标准输出默认为 GBK，而 RAG 流程内部（node_rerank 的调试 print）会输出含“•”的内容并抛 UnicodeEncodeError、直接中断整个查询图；需在 eval.py 开头把 sys.stdout / sys.stderr 用 reconfigure 切换为 utf-8
+
+【程序输出要求】
+1 将评估结果保存在 eval 目录下 qa_result.csv 文件中，编码为 utf-8 BOM、行尾 CRLF，便于 Excel 直接打开
+2 qa_result.csv包含9列，分别是：question, context, answer, ground_truth, faithfulness, answer_relevancy, context_precision, context_recall, answer_correctness
+3 context 列 = reranked_docs 中所有文档的 text 用 "\n\n" 拼接；分数取不到时写空字符串
+
+【代码要求】
+1 所有方法上增加中文注释
+2 核心步骤的函数名请使用 step1_xx \step2_xx ... 作为前缀 来明确步骤的顺序
+3 程序保存在eval目录下eval.py文件中
+4 文件头注释写明运行方式与前置条件（Milvus、MongoDB、LLM、MCP 联网搜索、本地 BGE-M3/Reranker 权重需就绪）

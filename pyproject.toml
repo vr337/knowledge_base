@@ -32,9 +32,33 @@ dependencies = [
     "datasets>=4.8.4",
     "openai-agents>=0.4.2",
     "requests>=2.32.5",
+    "ragas==0.4.3",
 ]
 # 项目下配置环境变量(更推荐)
 [[tool.uv.index]]
 name = "tsinghua"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+# PyTorch 官方 CPU wheel 源
+# 为什么需要它：PyPI / 清华源上的 torch 在 Linux 平台是 CUDA 版（体积 2.5GB+），
+# 依赖 libcudart 等 CUDA 动态库，在无 GPU 的 CPU 服务器上 import 时会直接崩溃。
+# 该源提供纯 CPU wheel（约 200MB，无 CUDA 依赖），仅 torch 三件套从这里解析。
+# explicit = true 表示不作为通用回退源，只有被下方 tool.uv.sources 显式引用的包才会用它。
+# 注：国内网络访问 download.pytorch.org 较慢时，可改为阿里云镜像
+#     https://mirrors.aliyun.com/pytorch-wheels/cpu/
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# torch 三件套必须同源解析，否则会出现 torch 用 CPU 版、torchvision 用 CUDA 版的版本错配
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+# 本项目不是可发布的 Python 包（入口是 app.* 下的脚本），
+# 标记为非包项目，使 `uv sync` 只安装依赖、不尝试构建/安装根项目。
+[tool.uv]
+package = false

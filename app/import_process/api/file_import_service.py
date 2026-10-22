@@ -193,3 +193,13 @@ async def get_task_progress(task_id: str) -> dict[str, Any]:
         f"[{task_id}] 任务状态查询，当前状态：{task_status_info['status']}，已完成节点：{task_status_info['done_list']}"
     )
     return task_status_info
+
+import uvicorn
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "app.import_process.api.file_import_service:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+    )

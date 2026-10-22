@@ -211,3 +211,13 @@ async def history(session_id: str, limit: int=10) -> dict[str, Any]:
 async def clear_chat_history(session_id: str) -> dict[str, Any]:
     count = clear_history(session_id)
     return {"message": "History cleared", "deleted_count": count}
+
+import uvicorn
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "app.query_process.api.query_service:app",
+        host="127.0.0.1",
+        port=8084,
+        reload=True,
+    )

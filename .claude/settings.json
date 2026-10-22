@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -m py_compile app/import_process/agent/nodes/node_pdf_to_md.py app/conf/mineru_config.py)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe /tmp/test_local_branch.py)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe test/_verify_local_mineru.py)",
+      "Bash(PYTHONPATH=d:/Desktop/code/knowledge_base ./.venv/Scripts/python.exe -c ' *)",
+      "Read(//d//**)",
+      "Read(//c/Users/hzh/.cache/**)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile app/lm/lm_utils.py app/conf/lm_config.py)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe test/_verify_llm_switch.py)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile app/lm/embedding_utils.py app/lm/reranker_utils.py app/conf/embedding_config.py app/conf/reranker_config.py)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe /tmp/t_csr.py)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe /tmp/t_csr2.py)",
+      "Bash(PYTHONPATH=\"d:/Desktop/code/knowledge_base\" ./.venv/Scripts/python.exe test/_t_csr.py)"
+    ]
+  }
+}

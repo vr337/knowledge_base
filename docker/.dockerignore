@@ -1,0 +1,46 @@
+# 版本管理与虚拟环境（体积最大且与镜像构建无关）
+.git
+.gitignore
+.venv
+venv
+
+# 环境变量文件：含密钥，绝不能打进镜像，运行时通过 env_file 挂载
+.env
+.env.*
+!.env.example
+
+# 运行期产物（.gitignore 已忽略，这里同样排除，避免 COPY . . 带入镜像）
+logs
+output
+temp-files
+
+# 本地测试与评估资产（CPU 服务器部署不需要）
+test
+eval
+.pytest_cache
+__pycache__
+*.py[oc]
+
+# 模型权重（体积数 GB，必须通过 volume 挂载而非打进镜像）
+models
+
+# 部署与文档
+# 注意：prompts/ 不能排除！app/core/load_prompt.py 运行时要从
+#       PROJECT_ROOT/prompts/*.prompt 读取提示词，排除会导致镜像内 FileNotFoundError
+deploy
+doc
+fastapi
+sse
+
+# 编辑器配置
+.vscode
+.idea
+
+# Docker 构建自身（避免把 Dockerfile 系列也 COPY 进镜像）
+Dockerfile
+Dockerfile.*
+.dockerignore
+
+# 依赖清单在构建早期单独 COPY 过，这里排除可避免 COPY . . 覆盖掉锁文件
+uv.lock
+pyproject.toml
